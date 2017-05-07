@@ -8,6 +8,7 @@ import           Control.Monad.State (execState, get, modify)
 import           Data.Monoid ((<>))
 import           Data.String.Conv (toS)
 import qualified Data.Text as T
+import           System.Environment
 import           Text.LaTeX.Base.Parser (parseLaTeX)
 import           Text.LaTeX.Base.Render (readFileTex, render)
 import           Text.LaTeX.Base.Syntax (LaTeX (..), TeXArg (..), lookForCommand, texmap)
@@ -53,10 +54,11 @@ matchName s (TeXCommS s' ) = s == s'
 matchName _ _              = False
 
 runCmd :: Cmd -> Latex -> Latex
-runCmd cmd = texmap (matchName $ cmdName cmd) $ \d -> cmdCont cmd . fixArgs $ getArgs d
+runCmd cmd = texmap (matchName $ cmdName cmd) $ \d ->
+    cmdCont cmd . fixArgs $ argsOf d
   where
-    getArgs (TeXComm _ args) = args
-    getArgs (TeXCommS _) = []
+    argsOf (TeXComm _ args) = args
+    argsOf (TeXCommS _)     = []
     fixArgs as = fmap (\(FixArg a) -> a) as
 
 getCommands :: Latex -> (Latex, [Cmd])
@@ -66,9 +68,13 @@ getCommands d = ( texmap (matchName "newcommand") (const mempty) d
 
 main :: IO ()
 main = do
-  Right x <- parseLaTeX <$> readFileTex "examples/test.tex"
-  let (x', cmds) = getCommands x
-      x'' = flip execState x' . replicateM 5 . forM_ cmds $ \cmd ->
-        modify $ runCmd cmd
-  putStrLn . toS $ render x''
+  file <- head <$> getArgs
+  (x, cmds) <- getCommands . either (error "bad parse") id
+                           . parseLaTeX
+                         <$> readFileTex file
+  let result = flip execState x
+             . replicateM 5
+             . forM_ cmds $ \cmd ->
+                 modify $ runCmd cmd
+  putStrLn . toS $ render result
 
