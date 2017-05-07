@@ -5,6 +5,7 @@ module Main where
 
 import           Control.Monad (forM_, replicateM)
 import           Control.Monad.State (execState, get, modify)
+import           Data.Bool (bool)
 import           Data.Monoid ((<>))
 import           Data.String.Conv (toS)
 import qualified Data.Text as T
@@ -12,8 +13,21 @@ import           System.Environment
 import           Text.LaTeX.Base.Parser (parseLaTeX)
 import           Text.LaTeX.Base.Render (readFileTex, render)
 import           Text.LaTeX.Base.Syntax (LaTeX (..), TeXArg (..), lookForCommand, texmap)
+import System.IO (openFile, Handle, stdout, stdin, IOMode (..), hGetContents, hPutStr, hFlush)
 
 type Latex = LaTeX
+
+data Config = Config
+  { configInput  :: Handle
+  , configOutput :: Handle
+  }
+
+getConfig :: IO Config
+getConfig = do
+  [inf, outf] <- getArgs
+  Config <$> (bool (openFile inf ReadMode)   (pure stdin)  $ inf  == "-")
+         <*> (bool (openFile outf WriteMode) (pure stdout) $ outf == "-")
+
 
 data Cmd = Cmd
   { cmdName :: String
@@ -68,13 +82,16 @@ getCommands d = ( texmap (matchName "newcommand") (const mempty) d
 
 main :: IO ()
 main = do
-  file <- head <$> getArgs
+  Config inh outh <- getConfig
   (x, cmds) <- getCommands . either (error "bad parse") id
                            . parseLaTeX
-                         <$> readFileTex file
+                           . toS
+                         <$> hGetContents inh
   let result = flip execState x
              . replicateM 5
              . forM_ cmds $ \cmd ->
                  modify $ runCmd cmd
-  putStrLn . toS $ render result
+
+  hPutStr outh . toS $ render result
+  hFlush outh
 
