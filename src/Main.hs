@@ -56,6 +56,10 @@ isRaw :: Latex -> Bool
 isRaw (TeXRaw _) = True
 isRaw _          = False
 
+isVerbatim :: Latex -> Bool
+isVerbatim (TeXEnv e _ _) = e == "verbatim"
+isVerbatim _              = False
+
 splice :: Int -> Latex -> Latex -> Latex
 splice idx arg (TeXRaw t) = result
   where
@@ -80,6 +84,9 @@ getCommands d = ( texmap (matchName "newcommand") (const mempty) d
                 , mkCmd <$> lookForCommand "newcommand" d
                 )
 
+doVerbatim :: Latex -> Latex
+doVerbatim = texmap isVerbatim (\(TeXEnv _ _ b) -> b)
+
 main :: IO ()
 main = do
   Config inh outh <- getConfig
@@ -92,6 +99,6 @@ main = do
              . forM_ cmds $ \cmd ->
                  modify $ runCmd cmd
 
-  hPutStr outh . toS $ render result
+  hPutStr outh . toS . render $ doVerbatim result
   hFlush outh
 
