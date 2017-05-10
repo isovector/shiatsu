@@ -10,10 +10,10 @@ import           Data.Monoid ((<>))
 import           Data.String.Conv (toS)
 import qualified Data.Text as T
 import           System.Environment
+import           System.IO (openFile, Handle, stdout, stdin, IOMode (..), hGetContents, hPutStr, hFlush)
 import           Text.LaTeX.Base.Parser (parseLaTeX)
 import           Text.LaTeX.Base.Render (readFileTex, render)
 import           Text.LaTeX.Base.Syntax (LaTeX (..), TeXArg (..), lookForCommand, texmap)
-import System.IO (openFile, Handle, stdout, stdin, IOMode (..), hGetContents, hPutStr, hFlush)
 
 type Latex = LaTeX
 
@@ -35,6 +35,12 @@ data Cmd = Cmd
   , cmdCont :: [Latex] -> Latex
   }
 
+data Env = Env
+  { envName :: String
+  , envArgs :: Int
+  , envCont :: [Latex] -> Latex -> Latex
+  }
+
 mkCmd :: [TeXArg] -> Cmd
 mkCmd [ FixArg (TeXCommS cmdName)
       , FixArg d
@@ -46,30 +52,46 @@ mkCmd [ FixArg (TeXCommS cmdName)
   where
     cmdCont = flip spliceLaTeX d
 
+mkEnv :: [TeXArg] -> Env
+mkEnv [ FixArg (TeXRaw (toS -> envName))
+      , FixArg o
+      , FixArg c
+      ] = Env (envName) 0 $ \_ d -> o <> d <> c
+mkEnv [ FixArg (TeXRaw (toS -> envName))
+      , OptArg (TeXRaw (read . toS -> envArgs))
+      , FixArg o
+      , FixArg c
+      ] = Env {..}
+  where
+    envCont args d = spliceLaTeX args $ o <> d <> c
+
 spliceLaTeX :: [Latex] -> Latex -> Latex
 spliceLaTeX args d' = flip execState d'
                     . forM_ (zip [1..] args)
                     $ \(idx, arg) -> modify . texmap isRaw
                                             $ splice idx arg
-
-isRaw :: Latex -> Bool
-isRaw (TeXRaw _) = True
-isRaw _          = False
-
-isVerbatim :: Latex -> Bool
-isVerbatim (TeXEnv e _ _) = e == "verbatim"
-isVerbatim _              = False
-
-splice :: Int -> Latex -> Latex -> Latex
-splice idx arg (TeXRaw t) = result
   where
-    Right result = parseLaTeX $ T.replace (toS $ "#" <> show idx) (render arg) t
+    splice :: Int -> Latex -> Latex -> Latex
+    splice idx arg (TeXRaw t) = result
+      where
+        Right result = parseLaTeX $ T.replace (toS $ "#" <> show idx) (render arg) t
 
+    isRaw :: Latex -> Bool
+    isRaw (TeXRaw _) = True
+    isRaw _          = False
 
 matchName :: String -> Latex -> Bool
 matchName s (TeXComm s' _) = s == s'
 matchName s (TeXCommS s' ) = s == s'
 matchName _ _              = False
+
+matchEnvName :: String -> Latex -> Bool
+matchEnvName s (TeXEnv s' _ _) = s == s'
+matchEnvName _ _               = False
+
+runEnv :: Env -> Latex -> Latex
+runEnv env = texmap (matchEnvName $ envName env) $ \(TeXEnv _ args d) ->
+    envCont env (fixArgs args) d
 
 runCmd :: Cmd -> Latex -> Latex
 runCmd cmd = texmap (matchName $ cmdName cmd) $ \d ->
@@ -77,15 +99,25 @@ runCmd cmd = texmap (matchName $ cmdName cmd) $ \d ->
   where
     argsOf (TeXComm _ args) = args
     argsOf (TeXCommS _)     = []
-    fixArgs as = fmap (\(FixArg a) -> a) as
+
+fixArgs :: [TeXArg] -> [Latex]
+fixArgs = fmap (\(FixArg a) -> a)
+
+extract :: String -> ([TeXArg] -> a) -> Latex -> (Latex, [a])
+extract name f d = ( texmap (matchName name) (const mempty) d
+                   , f <$> lookForCommand name d
+                   )
 
 getCommands :: Latex -> (Latex, [Cmd])
-getCommands d = ( texmap (matchName "newcommand") (const mempty) d
-                , mkCmd <$> lookForCommand "newcommand" d
-                )
+getCommands = extract "newcommand" mkCmd
 
-doVerbatim :: Latex -> Latex
-doVerbatim = texmap isVerbatim (\(TeXEnv _ _ b) -> b)
+getEnvironments :: Latex -> (Latex, [Env])
+getEnvironments = extract "newenvironment" mkEnv
+
+builtInEnvs :: [Env]
+builtInEnvs =
+  [ Env "verbatim" 0 $ const id
+  ]
 
 main :: IO ()
 main = do
@@ -94,11 +126,13 @@ main = do
                            . parseLaTeX
                            . toS
                          <$> hGetContents inh
-  let result = flip execState x
-             . replicateM 5
-             . forM_ cmds $ \cmd ->
-                 modify $ runCmd cmd
+  let (x', envs) = getEnvironments x
 
-  hPutStr outh . toS . render $ doVerbatim result
+  let result = flip execState x'
+             . replicateM 5 $ do
+                 forM_ cmds                  (modify . runCmd)
+                 forM_ (envs ++ builtInEnvs) (modify . runEnv)
+
+  hPutStr outh . toS $ render result
   hFlush outh
 
