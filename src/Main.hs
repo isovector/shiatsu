@@ -116,8 +116,7 @@ getEnvironments = extract "newenvironment" mkEnv
 
 builtInEnvs :: [Env]
 builtInEnvs =
-  [ Env "verbatim" 0 $ const id
-  , Env "indent!" 1 $ \[TeXRaw (read . toS -> i)] ->
+  [ Env "indent!" 1 $ \[TeXRaw (read . toS -> i)] ->
       texmap isRaw $ \(TeXRaw t) ->
         TeXRaw . T.unlines
                . fmap (mappend . toS $ replicate i ' ')
@@ -137,7 +136,13 @@ main = do
              . replicateM 5 $ do
                  forM_ cmds                  (modify . runCmd)
                  forM_ (envs ++ builtInEnvs) (modify . runEnv)
+                 modify $ fromRight . parseLaTeX . render
 
-  hPutStr outh . toS $ render result
+  hPutStr outh . toS
+               . render
+               $ runEnv (Env "verbatim" 0 $ const id) result
   hFlush outh
+
+fromRight :: Either a b -> b
+fromRight (Right b) = b
 
