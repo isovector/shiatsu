@@ -76,9 +76,9 @@ spliceLaTeX args d' = flip execState d'
       where
         Right result = parseLaTeX $ T.replace (toS $ "#" <> show idx) (render arg) t
 
-    isRaw :: Latex -> Bool
-    isRaw (TeXRaw _) = True
-    isRaw _          = False
+isRaw :: Latex -> Bool
+isRaw (TeXRaw _) = True
+isRaw _          = False
 
 matchName :: String -> Latex -> Bool
 matchName s (TeXComm s' _) = s == s'
@@ -117,6 +117,11 @@ getEnvironments = extract "newenvironment" mkEnv
 builtInEnvs :: [Env]
 builtInEnvs =
   [ Env "verbatim" 0 $ const id
+  , Env "indent!" 1 $ \[TeXRaw (read . toS -> i)] ->
+      texmap isRaw $ \(TeXRaw t) ->
+        TeXRaw . T.unlines
+               . fmap (mappend . toS $ replicate i ' ')
+               $ T.lines t
   ]
 
 main :: IO ()
