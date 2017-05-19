@@ -1,5 +1,6 @@
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ViewPatterns    #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE ViewPatterns      #-}
 
 module Main where
 
@@ -140,6 +141,8 @@ main = do
 
   hPutStr outh . toS
                . render
+               . runCmd (Cmd "}" 0 . const $ TeXRaw "}")
+               . runCmd (Cmd "{" 0 . const $ TeXRaw "{")
                $ runEnv (Env "verbatim" 0 $ const id) result
   hFlush outh
 
