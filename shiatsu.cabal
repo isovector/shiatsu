@@ -19,6 +19,6 @@ executable shiatsu
   main-is:             Main.hs
   -- other-modules:
   -- other-extensions:
-  build-depends:       base >=4.9 && <4.10, HaTeX, string-conv, mtl, text
+  build-depends:       base >=4.9 && <5, HaTeX, string-conv, mtl, text, transformers
   hs-source-dirs:      src
   default-language:    Haskell2010
