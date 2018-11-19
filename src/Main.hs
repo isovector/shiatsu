@@ -4,7 +4,7 @@
 
 module Main where
 
-import           Control.Monad (forM_, replicateM)
+import           Control.Monad (forM_, replicateM, join)
 import           Control.Monad.State (execState, get, modify)
 import           Data.Bool (bool)
 import           Data.Monoid ((<>))
@@ -19,14 +19,20 @@ import           Text.LaTeX.Base.Syntax (LaTeX (..), TeXArg (..), lookForCommand
 type Latex = LaTeX
 
 data Config = Config
-  { configInput  :: Handle
+  { configInput  :: String
   , configOutput :: Handle
   }
 
+getFileName :: String -> Maybe String
+getFileName "-" = Nothing
+getFileName f   = Just f
+
 getConfig :: IO Config
 getConfig = do
-  [inf, outf] <- getArgs
-  Config <$> (bool (openFile inf ReadMode)   (pure stdin)  $ inf  == "-")
+  inf   <- init <$> getArgs
+  outf  <- last <$> getArgs
+  input <- traverse (maybe getContents readFile . getFileName) inf
+  Config <$> (pure $ join input)
          <*> (bool (openFile outf WriteMode) (pure stdout) $ outf == "-")
 
 
@@ -126,12 +132,12 @@ builtInEnvs =
 
 main :: IO ()
 main = do
-  Config inh outh <- getConfig
-  (x, cmds) <- getCommands . either (error "bad parse") id
-                           . parseLaTeX
-                           . toS
-                         <$> hGetContents inh
-  let (x', envs) = getEnvironments x
+  Config input outh <- getConfig
+  let (x, cmds) = getCommands
+                . either (error "bad parse") id
+                . parseLaTeX
+                $ toS input
+      (x', envs) = getEnvironments x
 
   let result = flip execState x'
              . replicateM 5 $ do
