@@ -1,26 +1,35 @@
+{-# LANGUAGE BangPatterns      #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE ViewPatterns      #-}
 
 module Main where
 
+import Control.Exception (evaluate)
 import           Control.Monad (forM_, replicateM, join)
 import           Control.Monad.State (execState, get, modify)
 import           Data.Bool (bool)
 import           Data.Monoid ((<>))
 import           Data.String.Conv (toS)
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import           System.Environment
 import           System.IO (openFile, Handle, stdout, stdin, IOMode (..), hGetContents, hPutStr, hFlush)
-import           Text.LaTeX.Base.Parser (parseLaTeX)
+import           Text.LaTeX.Base.Parser (parseLaTeXWith, ParserConf (..))
 import           Text.LaTeX.Base.Render (readFileTex, render)
 import           Text.LaTeX.Base.Syntax (LaTeX (..), TeXArg (..), lookForCommand, texmap)
+import Debug.Trace
 
 type Latex = LaTeX
 
 data Config = Config
-  { configInput  :: String
+  { configInput  :: T.Text
   , configOutput :: Handle
+  }
+
+parserConf :: ParserConf
+parserConf = ParserConf
+  { verbatimEnvironments = ["code", "verbatim", "lstlisting", "dorepl"]
   }
 
 getFileName :: String -> Maybe String
@@ -31,8 +40,8 @@ getConfig :: IO Config
 getConfig = do
   inf   <- init <$> getArgs
   outf  <- last <$> getArgs
-  input <- traverse (maybe getContents readFile . getFileName) inf
-  Config <$> (pure $ join input)
+  input <- traverse (maybe TIO.getContents TIO.readFile . getFileName) inf
+  Config <$> (pure $ T.concat input)
          <*> (bool (openFile outf WriteMode) (pure stdout) $ outf == "-")
 
 
@@ -58,6 +67,7 @@ mkCmd [ FixArg (TeXCommS cmdName)
       ] = Cmd {..}
   where
     cmdCont = flip spliceLaTeX d
+mkCmd a = error $ show a
 
 mkEnv :: [TeXArg] -> Env
 mkEnv [ FixArg (TeXRaw (toS -> envName))
@@ -81,7 +91,7 @@ spliceLaTeX args d' = flip execState d'
     splice :: Int -> Latex -> Latex -> Latex
     splice idx arg (TeXRaw t) = result
       where
-        Right result = parseLaTeX $ T.replace (toS $ "#" <> show idx) (render arg) t
+        result = either (error . show) id . parseLaTeXWith parserConf $ T.replace (toS $ "#" <> show idx) (render arg) t
 
 isRaw :: Latex -> Bool
 isRaw (TeXRaw _) = True
@@ -98,17 +108,19 @@ matchEnvName _ _               = False
 
 runEnv :: Env -> Latex -> Latex
 runEnv env = texmap (matchEnvName $ envName env) $ \(TeXEnv _ args d) ->
-    envCont env (fixArgs args) d
+    envCont env (fmap fixArg args) d
 
 runCmd :: Cmd -> Latex -> Latex
 runCmd cmd = texmap (matchName $ cmdName cmd) $ \d ->
-    cmdCont cmd . fixArgs $ argsOf d
+    cmdCont cmd . fmap fixArg $ argsOf d
   where
     argsOf (TeXComm _ args) = args
     argsOf (TeXCommS _)     = []
 
-fixArgs :: [TeXArg] -> [Latex]
-fixArgs = fmap (\(FixArg a) -> a)
+fixArg :: TeXArg -> Latex
+fixArg (FixArg a) = a
+fixArg (OptArg a) = a
+
 
 extract :: String -> ([TeXArg] -> a) -> Latex -> (Latex, [a])
 extract name f d = ( texmap (matchName name) (const mempty) d
@@ -133,17 +145,17 @@ builtInEnvs =
 main :: IO ()
 main = do
   Config input outh <- getConfig
-  let (x, cmds) = getCommands
-                . either (error "bad parse") id
-                . parseLaTeX
-                $ toS input
-      (x', envs) = getEnvironments x
+  parsed <- evaluate $ parseLaTeXWith parserConf input
+  let !(!x, !cmds) = getCommands
+                   . either (error "bad parse") id
+                   $ parsed
+  let !(!x', !envs) = getEnvironments x
 
-  let result = flip execState x'
-             . replicateM 5 $ do
-                 forM_ cmds                  (modify . runCmd)
-                 forM_ (envs ++ builtInEnvs) (modify . runEnv)
-                 modify $ fromRight . parseLaTeX . render
+  let !result = flip execState x'
+              . replicateM 5 $ do
+                  forM_ cmds                  (modify . runCmd)
+                  forM_ (envs ++ builtInEnvs) (modify . runEnv)
+                  modify $ either (error . show) id . parseLaTeXWith parserConf . render
 
   hPutStr outh . toS
                . render
@@ -151,7 +163,4 @@ main = do
                . runCmd (Cmd "{" 0 . const $ TeXRaw "{")
                $ runEnv (Env "verbatim" 0 $ const id) result
   hFlush outh
-
-fromRight :: Either a b -> b
-fromRight (Right b) = b
 
